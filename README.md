@@ -1,7 +1,7 @@
 # DATA BASE
 commands currently available:  
 create table <tableName> (<varName, varType>)  
-insert into <tableName> values (<values>) 
+insert into <tableName> values (<values>)  
 select * from <tableName>;  
   
 EX:  
