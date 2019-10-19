@@ -10,4 +10,4 @@ create table T (A int, B string);
 insert into T values (100, 'Hello World!');  
 select * from T;  
 
-![alt text](C:\Users\Влад\Desktop\DataBase.jpg)
+![Screenshot](DataBase.jpg)
