@@ -533,6 +533,7 @@ bool isByte2(uint16_t byte2, FILE **f)
 	}
 }
 
+// TODO: error when section is empty
 void readData(char *tableName)
 {
 	FILE *f = fopen("dataBase.df", "rb");
@@ -568,7 +569,14 @@ readTableName:
 	}
 	else
 	{
-		while (!matchByte2(END_TABLE_DATA, &f));
+		while (!matchByte2(END_TABLE_DATA, &f))
+		{
+			if (feof(f))
+			{
+				printf("'%s' is empty\n", tableName);
+				return;
+			}
+		}
 		goto readTableName;
 	}
 }
