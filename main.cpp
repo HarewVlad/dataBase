@@ -339,6 +339,12 @@ struct Read
 	// TODO: add more info later
 };
 
+struct Delete
+{
+	char *tableName;
+	// TODO: add more info later
+};
+
 struct Var
 {
 	char *varName;
@@ -353,11 +359,13 @@ struct Table
 
 std::vector<Insert> insertions;
 std::vector<Read> reads;
+std::vector<Delete> deletions;
 std::vector<Table> tables;
 
 Insert insertion;
 Table table;
 Read read;
+Delete del;
 
 bool matchToken(TokenKind tokenKind)
 {
@@ -533,7 +541,28 @@ bool isByte2(uint16_t byte2, FILE **f)
 	}
 }
 
-// TODO: error when section is empty
+bool isTableFound(FILE **f, char *tableName)
+{
+readTableName:
+	char *tableNameFromFile = getStringFromFile(f);
+	if (strcmp(tableNameFromFile, tableName) == 0)
+	{
+		return true;
+	}
+	else
+	{
+		while (!matchByte2(END_TABLE_DATA, f))
+		{
+			if (feof(*f))
+			{
+				return false;
+			}
+		}
+		goto readTableName;
+	}
+}
+
+// TODO: change search
 void readData(char *tableName)
 {
 	FILE *f = fopen("dataBase.df", "rb");
@@ -543,11 +572,9 @@ void readData(char *tableName)
 		return;
 	}
 
-readTableName:
-	char *tableNameFromFile = getStringFromFile(&f);
-	if (strcmp(tableNameFromFile, tableName) == 0)
+	if (isTableFound(&f, tableName))
 	{
-		printf("Table name is -> '%s'\n", tableNameFromFile);
+		printf("Table name is -> '%s'\n", tableName);
 			
 		if (matchByte2(BEGIN_TABLE_DATA, &f))
 		{
@@ -569,16 +596,43 @@ readTableName:
 	}
 	else
 	{
+		printf("Table is empty\n");
+		return;
+	}
+
+	fclose(f);
+}
+
+void deleteData(char *tableName)
+{
+	// Delete data from table
+	FILE *f = fopen("dataBase.df", "rb+");
+	if (!f)
+	{
+		printf("Data base file not created or cant be opened\n");
+		return;
+	}
+
+	if (isTableFound(&f, tableName))
+	{
+		int size = strlen(tableName) + 1;
 		while (!matchByte2(END_TABLE_DATA, &f))
 		{
-			if (feof(f))
-			{
-				printf("'%s' is empty\n", tableName);
-				return;
-			}
+			size += 2;
 		}
-		goto readTableName;
+		size += 2;
+		fseek(f, -size, SEEK_CUR);
+
+		uint8_t *zeroBuffer = (uint8_t *)malloc(size); // +2 -> END_TABLE_DATA
+		memset(zeroBuffer, 0, size); // +2 -> END_TABLE_DATA
+		fwrite(zeroBuffer, 1, size, f); // +2 -> END_TABLE_DATA
 	}
+	else
+	{
+		fatal("table do not exist");
+	}
+
+	fclose(f);
 }
 
 enum CommandType
@@ -586,6 +640,7 @@ enum CommandType
 	COMMAND_CREATE,
 	COMMAND_INSERT,
 	COMMAND_SELECT,
+	COMMAND_DELETE
 };
 
 CommandType parse()
@@ -680,7 +735,17 @@ CommandType parse()
 	}
 	else if (matchKeyword("delete") && matchKeyword("from"))
 	{
+		Delete d = {};
+		d.tableName = parseName();
 
+		expectToken(TOKEN_SEMICOLON);
+
+		deletions.push_back(d);
+
+		// Current delete request
+		del = d;
+
+		return COMMAND_DELETE;
 	}
 	else
 	{
@@ -759,6 +824,27 @@ void resolveRead()
 	}
 }
 
+void resolveDelete()
+{
+	// Check if tableName exists in delete requests
+	bool isDeclared = false;
+	for (int i = 0; i < deletions.size(); i++)
+	{
+		for (int j = 0; j < tables.size(); j++)
+		{
+			if (strcmp(tables[j].tableName, deletions[i].tableName) == 0)
+			{
+				isDeclared = true;
+				break;
+			}
+		}
+		if (!isDeclared)
+		{
+			fatal("delete request from undeclared table");
+		}
+	}
+}
+
 void resolve(CommandType type)
 {
 	switch (type)
@@ -775,6 +861,11 @@ void resolve(CommandType type)
 		case COMMAND_SELECT:
 		{
 			resolveRead();
+		}
+		break;
+		case COMMAND_DELETE:
+		{
+			resolveDelete();
 		}
 		break;
 		default:
@@ -828,6 +919,11 @@ void typeCheck(CommandType type)
 		}
 		break;
 		case COMMAND_SELECT:
+		{
+			// ...
+		}
+		break;
+		case COMMAND_DELETE:
 		{
 			// ...
 		}
@@ -1005,6 +1101,11 @@ void execInsertData()
 	cleanCode();
 }
 
+void execDelete()
+{
+	deleteData(del.tableName);
+}
+
 void exec(CommandType type)
 {
 	switch (type)
@@ -1022,6 +1123,11 @@ void exec(CommandType type)
 		case COMMAND_SELECT:
 		{
 			execRead();
+		}
+		break;
+		case COMMAND_DELETE:
+		{
+			execDelete();
 		}
 		break;
 		default:
