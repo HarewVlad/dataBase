@@ -8,6 +8,7 @@
 
 // Main TODO: Should i clean code after every exec?
 // Main TODO: Should i all the time open the dbf?
+// Main TODO: Place offsets to data and table structure (4096, 256)
 
 // Block allocator
 #define MIN_BLOCK_SIZE 1024
@@ -160,6 +161,7 @@ void initKeywords()
 	putKeyword("into", strlen("into"));
 	putKeyword("select", strlen("select"));
 	putKeyword("from", strlen("from"));
+	putKeyword("delete", strlen("delete"));
 }
 
 bool isKeyword(const char *name, size_t length)
@@ -355,6 +357,7 @@ std::vector<Table> tables;
 
 Insert insertion;
 Table table;
+Read read;
 
 bool matchToken(TokenKind tokenKind)
 {
@@ -612,38 +615,31 @@ CommandType parse()
 			fatal("wrong stmt");
 		}
 	}
-	else if (matchKeyword("insert"))
+	else if (matchKeyword("insert") && matchKeyword("into"))
 	{
-		if (matchKeyword("into"))
-		{
-			Insert i;
-			i.tableName = parseName();
+		Insert i;
+		i.tableName = parseName();
 			
-			if (matchKeyword("values"))
-			{
-				expectToken(TOKEN_RPARENT);
-				
-				Expr *value = parseValue();
-				i.values.push_back(value);
-				while (matchToken(TOKEN_COMMA))
-				{
-					value = parseValue();
-					i.values.push_back(value);
-				}
-				expectToken(TOKEN_LPARENT);
-				expectToken(TOKEN_SEMICOLON);
-
-				insertions.push_back(i);
-
-				// Current insertion to commit
-				insertion = i;
-
-				return COMMAND_INSERT;
-			}
-		}
-		else
+		if (matchKeyword("values"))
 		{
-			fatal("wrong stmt");
+			expectToken(TOKEN_RPARENT);
+				
+			Expr *value = parseValue();
+			i.values.push_back(value);
+			while (matchToken(TOKEN_COMMA))
+			{
+				value = parseValue();
+				i.values.push_back(value);
+			}
+			expectToken(TOKEN_LPARENT);
+			expectToken(TOKEN_SEMICOLON);
+
+			insertions.push_back(i);
+
+			// Current insertion to commit
+			insertion = i;
+
+			return COMMAND_INSERT;
 		}
 	}
 	else if (matchKeyword("select"))
@@ -659,6 +655,9 @@ CommandType parse()
 
 				reads.push_back(r);
 
+				// Current read request
+				read = r;
+
 				return COMMAND_SELECT;
 			}
 			else
@@ -670,6 +669,10 @@ CommandType parse()
 		{
 			fatal("wrong stmt");
 		}
+	}
+	else if (matchKeyword("delete") && matchKeyword("from"))
+	{
+
 	}
 	else
 	{
@@ -932,12 +935,7 @@ Type stringToType(char *type)
 
 void execRead()
 {
-	for (int i = 0; i < reads.size(); i++)
-	{
-		readData(reads[i].tableName);
-	}
-
-	reads.clear();
+	readData(read.tableName);
 }
 
 void execInsertTable()
@@ -957,7 +955,7 @@ void execInsertTable()
 	emit16(END_TABLE_DESC);
 
 	// Write to file
-	FILE *f = fopen("dataBase.tf", "a+");
+	FILE *f = fopen("dataBase.tf", "ab+");
 	if (!f)
 	{
 		fatal("can't open database file");
@@ -987,7 +985,7 @@ void execInsertData()
 	emit16(END_TABLE_DATA);
 
 	// Write to file
-	FILE *f = fopen("dataBase.df", "a+");
+	FILE *f = fopen("dataBase.df", "ab+");
 	if (!f)
 	{
 		fatal("can't open database file");
