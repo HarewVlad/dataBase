@@ -9,6 +9,7 @@
 // Main TODO: Should i clean code after every exec?
 // Main TODO: Should i all the time open the dbf?
 // Main TODO: Place offsets to data and table structure (4096, 256)
+// Main TODO: replace 'string' and 'int' to some int value
 
 // Block allocator
 #define MIN_BLOCK_SIZE 1024
@@ -527,6 +528,19 @@ bool matchByte2(uint16_t byte2, FILE **f)
 	}
 }
 
+bool expectByte2(uint16_t byte2, FILE **f)
+{
+	if (read16(f) == byte2)
+	{
+		return true;
+	}
+	else
+	{
+		fatal("error in dbf");
+		return false;
+	}
+}
+
 bool isByte2(uint16_t byte2, FILE **f)
 {
 	if (read16(f) == byte2)
@@ -623,9 +637,9 @@ void deleteData(char *tableName)
 		size += 2;
 		fseek(f, -size, SEEK_CUR);
 
-		uint8_t *zeroBuffer = (uint8_t *)malloc(size); // +2 -> END_TABLE_DATA
-		memset(zeroBuffer, 0, size); // +2 -> END_TABLE_DATA
-		fwrite(zeroBuffer, 1, size, f); // +2 -> END_TABLE_DATA
+		uint8_t *zeroBuffer = (uint8_t *)malloc(size);
+		memset(zeroBuffer, 0, size);
+		fwrite(zeroBuffer, 1, size, f);
 	}
 	else
 	{
@@ -697,8 +711,6 @@ CommandType parse()
 			expectToken(TOKEN_LPARENT);
 			expectToken(TOKEN_SEMICOLON);
 
-			insertions.push_back(i);
-
 			// Current insertion to commit
 			insertion = i;
 
@@ -715,8 +727,6 @@ CommandType parse()
 				r.tableName = parseName();
 
 				expectToken(TOKEN_SEMICOLON);
-
-				reads.push_back(r);
 
 				// Current read request
 				read = r;
@@ -776,51 +786,45 @@ void resolveInsert()
 {
 	// Check for not existing tables in insert // TODO: optimize mb
 	bool isDeclared = false;
-	for (int i = 0; i < insertions.size(); i++)
+	for (int i = 0; i < tables.size(); i++)
 	{
-		for (int j = 0; j < tables.size(); j++)
+		if (strcmp(insertion.tableName, tables[i].tableName) == 0)
 		{
-			if (strcmp(insertions[i].tableName, tables[j].tableName) == 0)
+			isDeclared = true;
+
+			// Check for number of insertions
+			Table t = tables[i];
+			if (t.tableVars.size() != insertion.values.size())
 			{
-				isDeclared = true;
-
-				// Check for number of insertions
-				Table t = tables[j];
-				if (t.tableVars.size() != insertions[i].values.size())
-				{
-					fatal("number of insertions != table vars");
-				}
-
-				break;
+				fatal("number of insertions != table vars");
 			}
-		}
 
-		if (!isDeclared)
-		{
-			fatal("insertion into undeclared table");
+			break;
 		}
-		isDeclared = false;
 	}
+
+	if (!isDeclared)
+	{
+		fatal("insertion into undeclared table");
+	}
+	isDeclared = false;
 }
 
 void resolveRead()
 {
 	// Check if tableName exists in read requests
 	bool isDeclared = false;
-	for (int i = 0; i < reads.size(); i++)
+	for (int i = 0; i < tables.size(); i++)
 	{
-		for (int j = 0; j < tables.size(); j++)
+		if (strcmp(read.tableName, tables[i].tableName) == 0)
 		{
-			if (strcmp(tables[j].tableName, reads[i].tableName) == 0)
-			{
-				isDeclared = true;
-				break;
-			}
+			isDeclared = true;
+			break;
 		}
-		if (!isDeclared)
-		{
-			fatal("read request from undeclared table"); // TODO: from or to?
-		}
+	}
+	if (!isDeclared)
+	{
+		fatal("read request from undeclared table"); // TODO: from or to?
 	}
 }
 
@@ -828,20 +832,17 @@ void resolveDelete()
 {
 	// Check if tableName exists in delete requests
 	bool isDeclared = false;
-	for (int i = 0; i < deletions.size(); i++)
+	for (int i = 0; i < tables.size(); i++)
 	{
-		for (int j = 0; j < tables.size(); j++)
+		if (strcmp(del.tableName, tables[i].tableName) == 0)
 		{
-			if (strcmp(tables[j].tableName, deletions[i].tableName) == 0)
-			{
-				isDeclared = true;
-				break;
-			}
+			isDeclared = true;
+			break;
 		}
-		if (!isDeclared)
-		{
-			fatal("delete request from undeclared table");
-		}
+	}
+	if (!isDeclared)
+	{
+		fatal("delete request from undeclared table");
 	}
 }
 
@@ -858,6 +859,7 @@ void resolve(CommandType type)
 		{
 			resolveInsert();
 		}
+		break;
 		case COMMAND_SELECT:
 		{
 			resolveRead();
@@ -878,28 +880,24 @@ void resolve(CommandType type)
 void typeCheckInsert()
 {
 	// Check type that u insert with type that table u insert to have
-	for (int i = 0; i < insertions.size(); i++)
+	Table t;
+	for (int i = 0; i < tables.size(); i++)
 	{
-		// Search for table
-		Table t;
-		for (int j = 0; j < tables.size(); j++)
+		if (strcmp(insertion.tableName, tables[i].tableName) == 0)
 		{
-			if (strcmp(insertions[i].tableName, tables[j].tableName) == 0)
-			{
-				t = tables[j];
-				break;
-			}
+			t = tables[i];
+			break;
 		}
+	}
 
-		for (int j = 0; j < insertions[i].values.size(); j++)
+	for (int i = 0; i < insertion.values.size(); i++)
+	{
+		Type insertionType = insertion.values[i]->kind;
+		Type tableType = t.tableVars[i].varType;
+
+		if (insertionType != tableType)
 		{
-			Type insertionType = insertions[i].values[j]->kind;
-			Type tableType = t.tableVars[j].varType;
-
-			if (insertionType != tableType)
-			{
-				fatal("insert incompatible type");
-			}
+			fatal("insert incompatible type");
 		}
 	}
 }
@@ -1186,6 +1184,8 @@ void loadTableInfo()
 		}
 
 		tables.push_back(t);
+
+		expectByte2(END_TABLE_DESC, &f);
 	}
 
 	fclose(f);
