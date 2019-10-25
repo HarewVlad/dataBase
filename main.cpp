@@ -10,10 +10,11 @@
 // Main TODO: Should i all the time open the dbf?
 // Main TODO: Place offsets to data and table structure (4096, 256)
 // Main TODO: replace 'string' and 'int' to some int value
+// Main TODO: read code or type it in console ? (for all stages use std::vector<Read>, std::vector<Insert> ...)
 
 // Block allocator
 #define MIN_BLOCK_SIZE 1024
-#define MEMORY_ALIGN 64
+#define MEMORY_ALIGN 8
 #define MAX(a, b) (a) > (b) ? (a) : (b)
 #define ALIGN(a, b) (((a) + (b) - 1) & ~((b) - 1))
 #define ALIGN_PTR(a, b) (char *)(((uintptr_t)(a) + (b) - 1) & ~((b) - 1))
@@ -23,40 +24,27 @@ struct Memory
 	void *end;
 };
 
-Memory *arena = nullptr;
-std::vector<Memory *> memoryBlocks;
+Memory memory = {};
+std::vector<Memory> memoryBlocks;
 
 void *allocMemory(size_t size)
 {
-	static bool isInited = false;
-	if (!isInited)
-	{
-		// Init
-		arena = (Memory *)malloc(sizeof(Memory));
-		arena->begin = nullptr;
-		arena->end = nullptr;
-
-		isInited = true;
-	}
-	
-	if (size > (size_t)((size_t)arena->begin - (size_t)arena->end))
+	if (size > (size_t)((size_t)memory.end - (size_t)memory.begin))
 	{
 		// Grow
 		size_t newSize = ALIGN(MAX(size, MIN_BLOCK_SIZE), MEMORY_ALIGN);
-		arena->begin = malloc(newSize);
-		arena->end = (void *)((size_t)arena->begin + newSize);
+		memory.begin = malloc(newSize);
+		memory.end = (void *)((size_t)memory.begin + newSize);
 
-		memoryBlocks.push_back(arena);
+		memoryBlocks.push_back(memory);
 	}
-	Memory memoryBlock = {};
-	memoryBlock.begin = arena->begin;
-	memoryBlock.end = (void *)((size_t)arena->begin + size);
+	void *ptr = memory.begin;
+	memory.begin = ALIGN_PTR((void *)((size_t)memory.begin + size), MEMORY_ALIGN);
 
-	arena->begin = ALIGN_PTR(memoryBlock.end, MEMORY_ALIGN);
-
-	return memoryBlock.begin;
+	return ptr;
 }
 
+/*
 void freeMemory()
 {
 	for (auto b : memoryBlocks)
@@ -64,11 +52,12 @@ void freeMemory()
 		free(b);
 	}
 }
+*/
 
 // Utils
 char *copyString(const char *src, size_t len)
 {
-	char *result = (char *)malloc(len);
+	char *result = (char *)allocMemory(len); // NOTE: custom allocation
 	char *beginResult = result;
 	while (*src != '\0' && len--)
 	{
@@ -309,7 +298,7 @@ struct Expr
 
 Expr *newExpr(Type kind)
 {
-	Expr *e = (Expr *)malloc(sizeof(Expr));
+	Expr *e = (Expr *)allocMemory(sizeof(Expr)); // NOTE: custom allocation
 	e->kind = kind;
 	return e;
 }
@@ -468,7 +457,7 @@ Expr *parseValue()
 
 char *getStringFromFile(FILE **f)
 {
-	char *string = (char *)malloc(256); // TODO: redo this
+	char *string = (char *)allocMemory(256); // NOTE: custom allocation
 	int length = 0;
 	int c = 0;
 	while ((c = fgetc(*f)) != '\0')
@@ -476,33 +465,39 @@ char *getStringFromFile(FILE **f)
 		*string++ = c;
 		length++;
 	}
-	*string = '\0';
+	*string = c;
 	string -= length;
 
 	return string;
 }
 
-uint16_t read16(FILE **f) // TODO: free memory
+uint8_t read8(FILE **f) // TODO: free memory
 {
-	char *byte2Char = (char *)malloc(3); // 3 -> 2 for number and 1 for '\0'
-	memset(byte2Char, 0, 3);
-	fread(byte2Char, 2, 1, *f);
+	char *byteChar = (char *)allocMemory(2); // NOTE: custom allocation
+	memset(byteChar, 0, 2);
+	fread(byteChar, 1, 1, *f);
 
-	uint16_t byte2 = ((uint8_t)byte2Char[1] << 8) | (uint8_t)byte2Char[0];
+	uint8_t byte = (uint8_t)byteChar[0];
+
+	return byte;
+}
+
+uint16_t read16(FILE **f)
+{
+	uint8_t second = read8(f);
+	uint8_t first = read8(f);
+
+	uint16_t byte2 = (first << 8) | second;
 
 	return byte2;
 }
 
-uint32_t read32(FILE **f) // TODO: free memory
+uint32_t read32(FILE **f)
 {
-	char *byte4Char = (char *)malloc(5); // 5 -> 4 for number and 1 for '\0'
-	memset(byte4Char, 0, 5);
-	fread(byte4Char, 4, 1, *f);
+	uint16_t second = read16(f);
+	uint16_t first = read16(f);
 
-	uint32_t byte4 = ((uint8_t)byte4Char[3] << 24)
-		| ((uint8_t)byte4Char[2] << 16)
-		| ((uint8_t)byte4Char[1] << 8)
-		| (uint8_t)byte4Char[0];
+	uint32_t byte4 = (first << 16) | second;
 
 	return byte4;
 }
@@ -555,6 +550,7 @@ bool isByte2(uint16_t byte2, FILE **f)
 	}
 }
 
+// TODO: need offsets for tables otherwise not working
 bool isTableFound(FILE **f, char *tableName)
 {
 readTableName:
@@ -589,7 +585,7 @@ void readData(char *tableName)
 	if (isTableFound(&f, tableName))
 	{
 		printf("Table name is -> '%s'\n", tableName);
-			
+
 		if (matchByte2(BEGIN_TABLE_DATA, &f))
 		{
 			while (!isByte2(END_TABLE_DATA, &f))
@@ -617,36 +613,80 @@ void readData(char *tableName)
 	fclose(f);
 }
 
+// TODO: FIX BAG WITH DETERMINING END OF FILE
 void deleteData(char *tableName)
 {
 	// Delete data from table
-	FILE *f = fopen("dataBase.df", "rb+");
-	if (!f)
+	FILE *fDb = fopen("dataBase.df", "rb+");
+	if (!fDb)
 	{
 		printf("Data base file not created or cant be opened\n");
 		return;
 	}
 
-	if (isTableFound(&f, tableName))
+	FILE *fTemp = fopen("tempFile.temp", "ab+");
+	if (!fTemp)
 	{
-		int size = strlen(tableName) + 1;
-		while (!matchByte2(END_TABLE_DATA, &f))
-		{
-			size += 2;
-		}
-		size += 2;
-		fseek(f, -size, SEEK_CUR);
+		printf("Unable to delete data\n");
+		return;
+	}
 
-		uint8_t *zeroBuffer = (uint8_t *)malloc(size);
-		memset(zeroBuffer, 0, size);
-		fwrite(zeroBuffer, 1, size, f);
+	if (isTableFound(&fDb, tableName))
+	{
+		int begin = ftell(fDb) - strlen(tableName) - 1;
+		int end = begin;
+		while (!matchByte2(END_TABLE_DATA, &fDb))
+		{
+			end += 2;
+		}
+		end += 2;
+
+		// First part
+		if (begin != 0)
+		{
+			char *firstPart = (char *)malloc(begin + 1); // '\0'
+			memset(firstPart, 0, begin);
+			fseek(fDb, 0, SEEK_SET);
+			fread(firstPart, 1, begin, fDb);
+
+			fwrite(firstPart, 1, begin, fTemp);
+		}
+
+		// Second part
+		char ch = 0;
+		int endOfFile = end;
+		while ((ch = fgetc(fDb) != EOF))
+		{
+			endOfFile++;
+		}
+		int secondPartSize = endOfFile - end - begin;
+		if (secondPartSize != 0)
+		{
+			char *secondPart = (char *)malloc(secondPartSize + 1); // '\0'
+			memset(secondPart, 0, secondPartSize);
+			fseek(fDb, end, SEEK_SET);
+			fread(secondPart, 1, secondPartSize, fDb);
+
+			fwrite(secondPart, 1, secondPartSize, fTemp);
+		}
+
+		// Clear old file
+		fclose(fopen("dataBase.df", "w"));
+		fclose(fTemp);
+
+		// Copy content of temp file
+		while ((ch = fgetc(fTemp)) != EOF)
+		{
+			fputc(ch, fDb);
+		}
 	}
 	else
 	{
 		fatal("table do not exist");
 	}
 
-	fclose(f);
+	fclose(fDb);
+	fclose(fTemp);
 }
 
 enum CommandType
@@ -711,6 +751,9 @@ CommandType parse()
 			expectToken(TOKEN_LPARENT);
 			expectToken(TOKEN_SEMICOLON);
 
+			// For executing code from file
+			insertions.push_back(i);
+
 			// Current insertion to commit
 			insertion = i;
 
@@ -727,6 +770,9 @@ CommandType parse()
 				r.tableName = parseName();
 
 				expectToken(TOKEN_SEMICOLON);
+
+				// For executing code from file
+				reads.push_back(r);
 
 				// Current read request
 				read = r;
@@ -750,6 +796,9 @@ CommandType parse()
 
 		expectToken(TOKEN_SEMICOLON);
 
+		deletions.push_back(d);
+
+		// For executing code from file
 		deletions.push_back(d);
 
 		// Current delete request
@@ -1137,7 +1186,7 @@ void exec(CommandType type)
 // Console to type code
 char *readConsole()
 {
-	char *command = (char *)malloc(256);
+	char *command = (char *)allocMemory(256); // NOTE: custom allocation
 	memset(command, 0, 256);
 
 	int length = 0;
