@@ -18,6 +18,7 @@
 #define MAX(a, b) (a) > (b) ? (a) : (b)
 #define ALIGN(a, b) (((a) + (b) - 1) & ~((b) - 1))
 #define ALIGN_PTR(a, b) (char *)(((uintptr_t)(a) + (b) - 1) & ~((b) - 1))
+
 struct Memory
 {
 	void *begin;
@@ -455,13 +456,18 @@ Expr *parseValue()
 	return value;
 }
 
-char *getStringFromFile(FILE **f)
+char *readStringFromFile(FILE **f)
 {
 	char *string = (char *)allocMemory(256); // NOTE: custom allocation
 	int length = 0;
 	int c = 0;
 	while ((c = fgetc(*f)) != '\0')
 	{
+		if (feof(*f)) // TODO: mb do it another way
+		{
+			return nullptr;
+		}
+
 		*string++ = c;
 		length++;
 	}
@@ -550,26 +556,38 @@ bool isByte2(uint16_t byte2, FILE **f)
 	}
 }
 
-// TODO: need offsets for tables otherwise not working
-bool isTableFound(FILE **f, char *tableName)
+bool isNextByteEOF(FILE **f)
 {
-readTableName:
-	char *tableNameFromFile = getStringFromFile(f);
-	if (strcmp(tableNameFromFile, tableName) == 0)
+	fgetc(*f);
+	if (!feof(*f))
 	{
-		return true;
+		fseek(*f, -1, SEEK_CUR);
+		return false;
 	}
 	else
 	{
-		while (!matchByte2(END_TABLE_DATA, f))
-		{
-			if (feof(*f))
-			{
-				return false;
-			}
-		}
-		goto readTableName;
+		return true;
 	}
+}
+
+bool isTableFound(FILE **f, char *tableName) // TODO: seems like fseek to eof is not finding eof until reads byte
+{
+	int next = 0;
+	while (!isNextByteEOF(f))
+	{
+		char *tableNameFromFile = readStringFromFile(f);
+		if (strcmp(tableNameFromFile, tableName) != 0)
+		{
+			next = read32(f) + 2 + 2; // BEGIN_TABLE_DATA, END_TABLE_DATA
+		}
+		else
+		{
+			return true;
+		}
+
+		fseek(*f, next, SEEK_CUR);
+	}
+	return false;
 }
 
 // TODO: change search
@@ -584,13 +602,16 @@ void readData(char *tableName)
 
 	if (isTableFound(&f, tableName))
 	{
+		int size = read32(&f);
+
 		printf("Table name is -> '%s'\n", tableName);
+		printf("Table size -> '%d' bytes\n", size);
 
 		if (matchByte2(BEGIN_TABLE_DATA, &f))
 		{
 			while (!isByte2(END_TABLE_DATA, &f))
 			{
-				char *varType = getStringFromFile(&f);
+				char *varType = readStringFromFile(&f);
 				if (strcmp(varType, "int") == 0)
 				{
 					int varValue = read32(&f);
@@ -598,7 +619,7 @@ void readData(char *tableName)
 				}
 				else if (strcmp(varType, "string") == 0)
 				{
-					char *varValue = getStringFromFile(&f);
+					char *varValue = readStringFromFile(&f);
 					printf("Value is string -> '%s'\n", varValue);
 				}
 			}
@@ -613,7 +634,7 @@ void readData(char *tableName)
 	fclose(f);
 }
 
-// TODO: FIX BAG WITH DETERMINING END OF FILE
+// TODO: fix bug finding data size
 void deleteData(char *tableName)
 {
 	// Delete data from table
@@ -624,7 +645,7 @@ void deleteData(char *tableName)
 		return;
 	}
 
-	FILE *fTemp = fopen("tempFile.temp", "ab+");
+	FILE *fTemp = fopen("tempFile.temp", "wb+");
 	if (!fTemp)
 	{
 		printf("Unable to delete data\n");
@@ -633,48 +654,47 @@ void deleteData(char *tableName)
 
 	if (isTableFound(&fDb, tableName))
 	{
-		int begin = ftell(fDb) - strlen(tableName) - 1;
-		int end = begin;
-		while (!matchByte2(END_TABLE_DATA, &fDb))
-		{
-			end += 2;
-		}
-		end += 2;
+		int firstPartSize = ftell(fDb) - strlen(tableName) - 1; // '\0'
+		int tableSize = read32(&fDb);
+		int end = firstPartSize + tableSize + sizeof(int) + 2 * sizeof(short) + 2;
 
 		// First part
-		if (begin != 0)
+		if (firstPartSize != 0)
 		{
-			char *firstPart = (char *)malloc(begin + 1); // '\0'
-			memset(firstPart, 0, begin);
+			char *firstPart = (char *)malloc(firstPartSize + 1); // '\0'
+			memset(firstPart, 0, firstPartSize);
 			fseek(fDb, 0, SEEK_SET);
-			fread(firstPart, 1, begin, fDb);
+			fread(firstPart, 1, firstPartSize, fDb);
 
-			fwrite(firstPart, 1, begin, fTemp);
+			fwrite(firstPart, 1, firstPartSize, fTemp);
 		}
 
 		// Second part
-		char ch = 0;
-		int endOfFile = end;
-		while ((ch = fgetc(fDb) != EOF))
-		{
-			endOfFile++;
-		}
-		int secondPartSize = endOfFile - end - begin;
+		fseek(fDb, 0, SEEK_END);
+		int endOfFile = ftell(fDb);
+
+		int secondPartSize = endOfFile - end;
 		if (secondPartSize != 0)
 		{
 			char *secondPart = (char *)malloc(secondPartSize + 1); // '\0'
 			memset(secondPart, 0, secondPartSize);
-			fseek(fDb, end, SEEK_SET);
+			fseek(fDb, end + 1, SEEK_SET); // end + 1 -> Next after end of table section
 			fread(secondPart, 1, secondPartSize, fDb);
 
 			fwrite(secondPart, 1, secondPartSize, fTemp);
 		}
 
 		// Clear old file
-		fclose(fopen("dataBase.df", "w"));
-		fclose(fTemp);
+		fDb = freopen("dataBase.df", "wb", fDb);
+		if (!fDb)
+		{
+			fatal("Error while deleting info from data base");
+			return;
+		}
 
 		// Copy content of temp file
+		fseek(fTemp, 0, SEEK_SET);
+		int ch = 0;
 		while ((ch = fgetc(fTemp)) != EOF)
 		{
 			fputc(ch, fDb);
@@ -685,8 +705,11 @@ void deleteData(char *tableName)
 		fatal("table do not exist");
 	}
 
-	fclose(fDb);
 	fclose(fTemp);
+	fclose(fDb);
+
+	// Delete temp file
+	remove("tempFile.temp");
 }
 
 enum CommandType
@@ -1118,10 +1141,50 @@ void execInsertTable()
 	cleanCode();
 }
 
+size_t getExprSize(Expr *expr)
+{
+	size_t size = -1;
+	switch (expr->kind)
+	{
+		case TYPE_INT:
+		{
+			size = sizeof(int);
+		}
+		break;
+		case TYPE_STRING:
+		{
+			size = strlen(expr->string) + 1; // '\0'
+		}
+		break;
+		default:
+			fatal("wrong expr type");
+			break;
+	}
+
+	return size;
+}
+
+size_t getInsertDataSize()
+{
+	size_t totalSize = 0;
+	for (int i = 0; i < insertion.values.size(); i++)
+	{
+		Type varType = insertion.values[i]->kind;
+		char *varTypeString = typeToString(varType);
+		
+		Expr *expr = insertion.values[i];
+
+		totalSize += strlen(varTypeString) + 1; // '\0'
+		totalSize += getExprSize(expr);
+	}
+	return totalSize;
+}
+
 void execInsertData()
 {
 	// Data section
 	emitString(insertion.tableName, strlen(insertion.tableName) + 1); // '\0'
+	emit32(getInsertDataSize()); // TODO: i did that
 
 	emit16(BEGIN_TABLE_DATA);
 	for (int i = 0; i < insertion.values.size(); i++)
@@ -1222,12 +1285,12 @@ void loadTableInfo()
 	while (matchByte2(BEGIN_TABLE_DESC, &f))
 	{
 		Table t = {};
-		t.tableName = getStringFromFile(&f);
+		t.tableName = readStringFromFile(&f);
 
 		while (!isByte2(END_TABLE_DESC, &f))
 		{
-			char *varName = getStringFromFile(&f);
-			char *varTypeString = getStringFromFile(&f);
+			char *varName = readStringFromFile(&f);
+			char *varTypeString = readStringFromFile(&f);
 			Type varType = stringToType(varTypeString);
 			t.tableVars.push_back(Var{ varName, varType });
 		}
