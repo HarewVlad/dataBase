@@ -634,10 +634,9 @@ void readData(char *tableName)
 	fclose(f);
 }
 
-// TODO: fix bug finding data size
+// TODO: bug with copy size
 void deleteData(char *tableName)
 {
-	// Delete data from table
 	FILE *fDb = fopen("dataBase.df", "rb+");
 	if (!fDb)
 	{
@@ -673,7 +672,7 @@ void deleteData(char *tableName)
 		fseek(fDb, 0, SEEK_END);
 		int endOfFile = ftell(fDb);
 
-		int secondPartSize = endOfFile - end;
+		int secondPartSize = endOfFile - end - 1;
 		if (secondPartSize != 0)
 		{
 			char *secondPart = (char *)malloc(secondPartSize + 1); // '\0'
@@ -1184,7 +1183,7 @@ void execInsertData()
 {
 	// Data section
 	emitString(insertion.tableName, strlen(insertion.tableName) + 1); // '\0'
-	emit32(getInsertDataSize()); // TODO: i did that
+	emit32(getInsertDataSize());
 
 	emit16(BEGIN_TABLE_DATA);
 	for (int i = 0; i < insertion.values.size(); i++)
