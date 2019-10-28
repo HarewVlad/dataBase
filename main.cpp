@@ -6,9 +6,8 @@
 #include <map>
 #include <cstdarg>
 
-// Main TODO: Should i clean code after every exec?
-// Main TODO: Should i all the time open the dbf?
-// Main TODO: Place offsets to data and table structure (4096, 256)
+// Main TODO: offset to data 4096
+// Main TODO: Should i all the time open the dbf? (Caching)
 // Main TODO: replace 'string' and 'int' to some int value
 // Main TODO: read code or type it in console ? (for all stages use std::vector<Read>, std::vector<Insert> ...)
 
@@ -321,6 +320,7 @@ Expr *newExprString(char *string)
 struct Insert
 {
 	char *tableName;
+	int numRows;
 	std::vector<Expr *> values;
 };
 
@@ -761,8 +761,9 @@ CommandType parse()
 			
 		if (matchKeyword("values"))
 		{
+			int numRows = 0;
+
 			expectToken(TOKEN_RPARENT);
-				
 			Expr *value = parseValue();
 			i.values.push_back(value);
 			while (matchToken(TOKEN_COMMA))
@@ -771,7 +772,27 @@ CommandType parse()
 				i.values.push_back(value);
 			}
 			expectToken(TOKEN_LPARENT);
+
+			numRows++;
+
+			while (matchToken(TOKEN_COMMA))
+			{
+				expectToken(TOKEN_RPARENT);
+
+				Expr *value = parseValue();
+				i.values.push_back(value);
+				while (matchToken(TOKEN_COMMA))
+				{
+					value = parseValue();
+					i.values.push_back(value);
+				}
+				expectToken(TOKEN_LPARENT);
+
+				numRows++;
+			}
 			expectToken(TOKEN_SEMICOLON);
+
+			i.numRows = numRows;
 
 			// For executing code from file
 			insertions.push_back(i);
@@ -865,7 +886,7 @@ void resolveInsert()
 
 			// Check for number of insertions
 			Table t = tables[i];
-			if (t.tableVars.size() != insertion.values.size())
+			if (t.tableVars.size() != insertion.values.size() / insertion.numRows)
 			{
 				fatal("number of insertions != table vars");
 			}
@@ -878,7 +899,6 @@ void resolveInsert()
 	{
 		fatal("insertion into undeclared table");
 	}
-	isDeclared = false;
 }
 
 void resolveRead()
@@ -961,16 +981,20 @@ void typeCheckInsert()
 		}
 	}
 
-	for (int i = 0; i < insertion.values.size(); i++)
+	for (int i = 0; i < t.tableVars.size(); i++)
 	{
-		Type insertionType = insertion.values[i]->kind;
-		Type tableType = t.tableVars[i].varType;
-
-		if (insertionType != tableType)
+		for (int j = 0; j < insertion.values.size(); j++)
 		{
-			fatal("insert incompatible type");
+			Type insertionType = insertion.values[j]->kind;
+			Type tableType = t.tableVars[i].varType;
+
+			if (insertionType != tableType)
+			{
+				fatal("insert incompatible type");
+			}
 		}
 	}
+	
 }
 
 void typeCheck(CommandType type)
