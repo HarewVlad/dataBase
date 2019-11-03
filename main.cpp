@@ -317,11 +317,15 @@ Expr *newExprString(char *string)
 	return e;
 }
 
+struct InsertData
+{
+	std::vector<Expr *> values;
+};
+
 struct Insert
 {
 	char *tableName;
-	int numRows;
-	std::vector<Expr *> values;
+	std::vector<InsertData> insertions;
 };
 
 struct Read
@@ -634,7 +638,6 @@ void readData(char *tableName)
 	fclose(f);
 }
 
-// TODO: bug with copy size
 void deleteData(char *tableName)
 {
 	FILE *fDb = fopen("dataBase.df", "rb+");
@@ -761,38 +764,33 @@ CommandType parse()
 			
 		if (matchKeyword("values"))
 		{
-			int numRows = 0;
-
 			expectToken(TOKEN_RPARENT);
-			Expr *value = parseValue();
-			i.values.push_back(value);
+
+			InsertData d = {};
+			d.values.push_back(parseValue());
 			while (matchToken(TOKEN_COMMA))
 			{
-				value = parseValue();
-				i.values.push_back(value);
+				d.values.push_back(parseValue());
 			}
-			expectToken(TOKEN_LPARENT);
 
-			numRows++;
+			expectToken(TOKEN_LPARENT);
+			i.insertions.push_back(d);
 
 			while (matchToken(TOKEN_COMMA))
 			{
 				expectToken(TOKEN_RPARENT);
 
-				Expr *value = parseValue();
-				i.values.push_back(value);
+				d = {};
+				d.values.push_back(parseValue());
 				while (matchToken(TOKEN_COMMA))
 				{
-					value = parseValue();
-					i.values.push_back(value);
+					d.values.push_back(parseValue());
 				}
-				expectToken(TOKEN_LPARENT);
 
-				numRows++;
+				expectToken(TOKEN_LPARENT);
+				i.insertions.push_back(d);
 			}
 			expectToken(TOKEN_SEMICOLON);
-
-			i.numRows = numRows;
 
 			// For executing code from file
 			insertions.push_back(i);
@@ -886,9 +884,12 @@ void resolveInsert()
 
 			// Check for number of insertions
 			Table t = tables[i];
-			if (t.tableVars.size() != insertion.values.size() / insertion.numRows)
+			for (int j = 0; j < insertion.insertions.size(); j++)
 			{
-				fatal("number of insertions != table vars");
+				if (t.tableVars.size() != insertion.insertions[j].values.size())
+				{
+					fatal("number of insertions != table vars");
+				}
 			}
 
 			break;
@@ -981,12 +982,12 @@ void typeCheckInsert()
 		}
 	}
 
-	for (int i = 0; i < t.tableVars.size(); i++)
+	for (int i = 0; i < insertion.insertions.size(); i++)
 	{
-		for (int j = 0; j < insertion.values.size(); j++)
+		for (int j = 0; j < t.tableVars.size(); j++)
 		{
-			Type insertionType = insertion.values[j]->kind;
-			Type tableType = t.tableVars[i].varType;
+			Type insertionType = insertion.insertions[i].values[j]->kind;
+			Type tableType = t.tableVars[j].varType;
 
 			if (insertionType != tableType)
 			{
@@ -994,7 +995,6 @@ void typeCheckInsert()
 			}
 		}
 	}
-	
 }
 
 void typeCheck(CommandType type)
@@ -1190,15 +1190,18 @@ size_t getExprSize(Expr *expr)
 size_t getInsertDataSize()
 {
 	size_t totalSize = 0;
-	for (int i = 0; i < insertion.values.size(); i++)
+	for (int i = 0; i < insertion.insertions.size(); i++)
 	{
-		Type varType = insertion.values[i]->kind;
-		char *varTypeString = typeToString(varType);
-		
-		Expr *expr = insertion.values[i];
+		for (int j = 0; j < insertion.insertions[i].values.size(); j++)
+		{
+			Type varType = insertion.insertions[i].values[j]->kind;
+			char *varTypeString = typeToString(varType);
 
-		totalSize += strlen(varTypeString) + 1; // '\0'
-		totalSize += getExprSize(expr);
+			Expr *expr = insertion.insertions[i].values[j];
+
+			totalSize += strlen(varTypeString) + 1; // '\0'
+			totalSize += getExprSize(expr);
+		}
 	}
 	return totalSize;
 }
@@ -1210,14 +1213,18 @@ void execInsertData()
 	emit32(getInsertDataSize());
 
 	emit16(BEGIN_TABLE_DATA);
-	for (int i = 0; i < insertion.values.size(); i++)
+	for (int i = 0; i < insertion.insertions.size(); i++)
 	{
-		Type varType = insertion.values[i]->kind;
-		char *varTypeString = typeToString(varType);
-		emitString(varTypeString, strlen(varTypeString) + 1); // '\0'
+		for (int j = 0; j < insertion.insertions[i].values.size(); j++)
+		{
+			Type varType = insertion.insertions[i].values[j]->kind;
+			char *varTypeString = typeToString(varType);
+			emitString(varTypeString, strlen(varTypeString) + 1); // '\0'
 
-		Expr *expr = insertion.values[i];
-		emitValue(expr);
+			Expr *expr = insertion.insertions[i].values[j];
+			emitValue(expr);
+		}
+		
 	}
 	emit16(END_TABLE_DATA);
 
