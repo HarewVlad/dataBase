@@ -216,7 +216,7 @@ begin:
 			{
 				stream++;
 				char *begin = stream;
-				while (*stream != '\'')
+				while (*stream && *stream != '\'')
 				{
 					stream++;
 				}
@@ -263,7 +263,7 @@ begin:
 			break;
 		default:
 			{
-				token.name = stream;
+				token.kind = static_cast<TokenKind>(*stream);
 				stream++;
 			}
 			break;
@@ -675,7 +675,7 @@ void deleteData(char *tableName)
 		fseek(fDb, 0, SEEK_END);
 		int endOfFile = ftell(fDb);
 
-		int secondPartSize = endOfFile - end - 1;
+		int secondPartSize = endOfFile - end;
 		if (secondPartSize != 0)
 		{
 			char *secondPart = (char *)malloc(secondPartSize + 1); // '\0'
@@ -1102,12 +1102,12 @@ char *typeToString(Type type)
 	{
 		case TYPE_INT:
 		{
-			return (char *)"int";
+			return const_cast<char *>("int");
 		}
 		break;
 		case TYPE_STRING:
 		{
-			return (char *)"string";
+			return const_cast<char *>("string");
 		}
 		break;
 		default:
